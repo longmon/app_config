@@ -179,7 +179,7 @@ ZEND_GET_MODULE(app_config)
 
 void app_config_server()
 {
-	//daemonize();
+	daemonize();
 	printf("server starting ...\n");
 	int unix_sock_id = unix_socket_listen("/tmp/app_config_server.sock");
 	printf("unix_sock_id:%d\n", unix_sock_id);
@@ -241,104 +241,85 @@ int unix_socket_listen( const char *pathname ) {
 }
 
 int unix_socket_accept( int fd ) {
-	struct sockaddr_un client_un;
-	struct stat st;
-	int len;
-	int sock;
 	int epoll_fd;
 	struct epoll_event ev;
 	struct epoll_event *evs;
 	int s;
 	epoll_fd = epoll_create1(0);
-	make_socket_nonblock(fd);
+	if( make_socket_nonblock(fd) < 0 ){
+		return -1;
+	}
 	ev.data.fd = fd;
-	ev.events = EPOLLIN | EPOLLET;
+	ev.events = EPOLLIN|EPOLLET;
 	s = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev);
 	if( s < 0 ){
 		perror("epoll_ctl");
-		abort();
-		return 0;
+		return -2;
 	}
 	evs = calloc(MAX_EVENTS, sizeof ev);
 	printf("accepting...\n");
-	for(;;)
+
+	int i,n, sock, e;
+	int client;
+	struct sockaddr_in in_addr;
+	socklen_t in_len;
+	in_len = sizeof(in_addr);
+	char buffer[256];
+	memset(buffer, 0, sizeof(buffer));
+	while(1)
 	{
-		int i,n;
-		n = epoll_wait( epoll_fd, evs, MAX_EVENTS, -1); //blocking until a acceptable socket come in
-		printf("wpoll_eait:%d\n",n);
-		for( i = 0; i < n; i++ ){
-			printf("events:%d\n",evs[i].events);
-			if( (evs[i].events & EPOLLERR ) || ( evs[i].events & EPOLLHUP ) || (!( evs[i].events & EPOLLIN )) ){
-				printf("epoll_wait error ==> EPOLLERR:%d,EPOLLHUP:%d,EPOLLIN:%d\n",EPOLLERR,EPOLLHUP,EPOLLIN );
-				close(evs[i].data.fd);
-				epoll_ctl(epoll_fd, EPOLL_CTL_DEL, evs[i].data.fd, NULL);
+		n = epoll_wait( epoll_fd, evs, MAX_EVENTS, 1);
+		for( i = 0; i < n; i++ )
+		{
+			sock = evs[i].data.fd;
+			e 	 = evs[i].events;
+			printf("sock:%d\n", sock);
+			if( e & (EPOLLERR | EPOLLHUP) ){
+				printf("error:%d\n", e);
+				//epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock, NULL);
+				close(sock);
 				continue;
-			} else if( fd == evs[i].data.fd ){
-				printf("fd==evs[i].data.fd\n");
-				for(;;){
-					struct sockaddr_in in_addr;
-					socklen_t in_len;
-					int socket_in;
-					char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-					in_len = sizeof(in_addr);
-					socket_in = accept( evs[i].data.fd, (struct sockaddr*)&in_addr, &in_len );
-					printf("accepted:%d\n", socket_in);
-					if( socket_in == -1 ){
-						if( errno == EAGAIN || errno == EWOULDBLOCK ){
-							break;
-						}else{
-							printf("accept error[%d]:%s\n", errno, strerror(errno));
+			}
+			if( e & EPOLLIN )
+			{
+				if( sock == fd ){
+					while(1){
+						client = accept( sock, (struct sockaddr*)&in_addr, &in_len );
+						if( client == -1 ){
+							if( errno == EAGAIN || errno == EWOULDBLOCK ){
+								break;
+							}else{
+								printf("accept error[%d]:%s\n", errno, strerror(errno));
+								break;
+							}
+						}
+						make_socket_nonblock(client);
+						ev.data.fd = client;
+						ev.events = EPOLLIN|EPOLLET;
+						epoll_ctl( epoll_fd, EPOLL_CTL_ADD, client, &ev);
+					}
+				} else {
+					int done = 0;
+					int count = 0;
+					while(1){
+						count = 0;
+						count = recv( sock, buffer, 256, 0);
+						if( count == -1 ){
+							if( errno != EAGAIN ){
+								close(sock);
+								//epoll_ctl( epoll_fd, EPOLL_CTL_DEL, sock, NULL);
+							}
 							break;
 						}
-					}
-					
-					s = make_socket_nonblock(socket_in);
-					if( s == -1 ){
-						printf("make_socket_nonblock");
-						return -1;
-					}
-					ev.data.fd = socket_in;
-					ev.events = EPOLLIN|EPOLLET;
-					s = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket_in, &ev);
-					if( s == -1 ){
-						printf("epoll_ctl");
-						return -1;
-					}
-				}
-				continue;			
-			} else {
-				int done = 0;
-				printf("read start...\n");
-				for(;;)
-				{
-					ssize_t count;
-					char buf[512];
-					memset(buf,0,sizeof(buf));
-					count = read(evs[i].data.fd, buf, sizeof(buf) );
-					if( count == -1 ){
-						/* If errno == EAGAIN, that means we have read all
-                         data. So go back to the main loop. */
-						if( errno != EAGAIN ){
-							perror("socket read");
-							done = 1;
+						if( count == 0 ){
+							close(sock);
+							//epoll_ctl( epoll_fd, EPOLL_CTL_DEL, sock, NULL);
+							break;
 						}
-						break;
-					}else if( count == 0 ){
-						/* End of file. The remote has closed the
-                         connection. */
-						done = 1;
-						break;
-					}//if we get count == sizeof(buf) there were more data in the socket waiting to read!
-					printf("content from remote client:%s\n", buf);
-					char *feedback = "halo man,I heared from you!";
-					if( send( evs[i].data.fd, feedback, strlen(feedback), 0) < 0 ){
-						printf("write error[%d]:%s\n", errno, strerror(errno) );
+						printf("data:%s\n", buffer);
+						char *ret = "123345";
+						write(sock, ret, strlen(ret));
 					}
-				}
-				if( done ){
-					printf("connection close by remote socket:%d\n", evs[i].data.fd);
-					close(evs[i].data.fd);
-					epoll_ctl(epoll_fd, EPOLL_CTL_DEL, evs[i].data.fd, NULL);
 				}
 			}
 		}
@@ -368,7 +349,7 @@ void daemonize()
 		exit(1);
 	}
 	for( n = 0; n < NOFILE; n++ ){
-		close(n);
+		//close(n);
 	}
 	chdir("/tmp");
 	umask(0);
