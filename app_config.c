@@ -72,6 +72,7 @@ ZEND_FUNCTION(app_config_init)
 PHP_FUNCTION(app_config_get)
 {
 	char *data = "app_config_get";
+	socket_senddata(data);
 }
 /* }}} */
 /* The previous line is meant for vim and emacs, so it can correctly fold and 
@@ -371,4 +372,43 @@ int make_socket_nonblock( int sockfd )
 		return -2;
 	}
 	return 0;
+}
+
+int socket_senddata( char *data )
+{
+	int sck = socket_connect();
+	if( sck < 0 ){
+		printf("connect error:[%d]%s\n", errno, strerror(errno) );
+		return  -1;
+	}
+	if( write(sck, data, strlen(data) ) < 0 ) {
+		printf("write error:[%d]%s\n", errno, strerror(errno) );
+		return -2;
+	}
+	char buf[512] = {0};
+	if( recv(sck, buf, 512, 0 ) < 0 ){
+		printf("recv error:[%d]%s\n");
+		return -3;
+	}
+	printf("recv data:%s\n", buf);
+	return 0;
+}
+
+int socket_connect()
+{
+	int s,len;
+	struct sockaddr_un addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, SOCK_PATHNAME, strlen(SOCK_PATHNAME));
+	len = sizeof( addr );
+
+	s = socket( AF_UNIX, SOCK_STREAM, 0 );
+	if( s < 0 ){
+		return -1;
+	}
+	if( connect(s, (struct sockaddr*)&addr, len) < 0 ){
+		return -2;
+	}
+	return s;
 }
