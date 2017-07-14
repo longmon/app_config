@@ -71,7 +71,20 @@ ZEND_FUNCTION(app_config_init)
 
 PHP_FUNCTION(app_config_get)
 {
-	char *data = "app_config_get";
+	char *key = NULL;
+	int len;
+	if( zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "s", &key, &len) == FAILURE ){
+		return;
+	}
+	Req req;
+	memset(&req, 0, sizeof(req));
+	strncpy(req.key, key, strlen(key));
+
+	zval retval;
+	int ret = unix_socket_get( req, &retval);
+	if( ret < 0 ){
+		printf("unix_socket_get:[%d]%s\n", errno, strerror(errno));
+	}
 }
 /* }}} */
 /* The previous line is meant for vim and emacs, so it can correctly fold and 
@@ -180,9 +193,7 @@ ZEND_GET_MODULE(app_config)
 void app_config_server()
 {
 	daemonize();
-	printf("server starting ...\n");
-	int unix_sock_id = unix_socket_listen("/tmp/app_config_server.sock");
-	printf("unix_sock_id:%d\n", unix_sock_id);
+	int unix_sock_id = unix_socket_listen(SOCK_PATHNAME);
 	unix_socket_accept(unix_sock_id);
 }
 
@@ -257,7 +268,6 @@ int unix_socket_accept( int fd ) {
 		return -2;
 	}
 	evs = calloc(MAX_EVENTS, sizeof ev);
-	printf("accepting...\n");
 
 	int i,n, sock, e;
 	int client;
@@ -273,10 +283,7 @@ int unix_socket_accept( int fd ) {
 		{
 			sock = evs[i].data.fd;
 			e 	 = evs[i].events;
-			printf("sock:%d\n", sock);
 			if( e & (EPOLLERR | EPOLLHUP) ){
-				printf("error:%d\n", e);
-				//epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock, NULL);
 				close(sock);
 				continue;
 			}
@@ -372,3 +379,43 @@ int make_socket_nonblock( int sockfd )
 	}
 	return 0;
 }
+
+int unix_socket_get( Req req, zval* retval)
+{
+	struct sockaddr_un un;
+	memset( &un, 0, sizeof un);
+	un.sun_family = AF_UNIX;
+	strncpy(un.sun_path, SOCK_PATHNAME, strlen(SOCK_PATHNAME) );
+	int client = socket(AF_UNIX, SOCK_STREAM, 0 );
+	if( client < 0 ){
+		return -1;
+	}
+	if( connect( client, (struct sockaddr*)&un, sizeof(un) )  == -1 ){
+		return -2;
+	}
+	if( write(client, req.key, strlen(req.key)) == -1 ){
+		return -3;
+	}
+	char buf[256] = {0};
+	if( recv(client, buf, 256, 0 ) < 0 ){
+		return -4;
+	}
+	printf("buf:%s\n", buf);
+	return 0;
+}
+
+int config_get( const char *key )
+{
+
+}
+
+bool check_key( const char *key )
+{
+	if( key == '\0' ){
+		return false;
+	}
+	char *tmp = NULL;
+	for( tmp = key; tmp != '\0'; tmp++ ){
+		if( tmp == "" )
+	}
+} 
