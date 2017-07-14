@@ -40,6 +40,12 @@ extern zend_module_entry app_config_module_entry;
 
 #define MAX_EVENTS 128
 
+#define SOCK_PATHNAME "/tmp/app_config_server.sock"
+
+typedef struct {
+  char key[256];
+} Req;
+
 PHP_FUNCTION(app_config_init);
 
 PHP_FUNCTION(app_config_get);
@@ -85,6 +91,10 @@ int unix_socket_listen( const char *pathname );
 int make_socket_nonblock( int sockfd );
 
 void daemonize();
+
+int unix_socket_get(Req req, zval *retval);
+
+int config_get( const char *key );
 
 #endif	/* PHP_APP_CONFIG_H */
 
