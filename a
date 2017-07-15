@@ -1,13 +1,8 @@
-#!/usr/local/bin/php
+#!/usr/local/php/bin/php
+
 <?php
-$socket = stream_socket_client("unix:///tmp/app_config_server.sock",$errno, $strerror, 3);
 
-stream_set_blocking($socket,1);
-
-stream_set_timeout($socket, 3);
-
-fwrite($socket, "dfasdfdfsafsdf");
-
-$data = fread($socket,256);
-
-var_dump($data);
+app_config_init();
+$a = array("a",'b',1,2,"a"=>333);
+$b = "aaaa";
+app_config_load($a);

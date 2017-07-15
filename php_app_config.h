@@ -42,11 +42,19 @@ extern zend_module_entry app_config_module_entry;
 
 #define SOCK_PATHNAME "/tmp/app_config_server.sock"
 
+#define APP_CONFIG_INIT_ARRAY(x, y) ALLOC_HASHTABLE(x);zend_hash_init(x, y, NULL, NULL, 1)
+
+
 typedef struct {
   char key[256];
+  char namespace[256];
 } Req;
 
 PHP_FUNCTION(app_config_init);
+
+PHP_FUNCTION(app_config_load);
+
+PHP_FUNCTION(app_config_start);
 
 PHP_FUNCTION(app_config_get);
 
@@ -78,6 +86,8 @@ ZEND_END_MODULE_GLOBALS(app_config)
 
 void app_config_server();
 
+int app_config_load_conf( zval *z_array, const char *namespace );
+
 int make_socketpair_pipe();
 
 void sub_process_handler();
@@ -94,7 +104,11 @@ void daemonize();
 
 int unix_socket_get(Req req, zval *retval);
 
-int config_get( const char *key );
+int config_get( const char *key, const char *namespace, void **pDest );
+
+HashTable* check_key( const char *key, const char *delim );
+
+void hashtable_print( HashTable *ht );
 
 #endif	/* PHP_APP_CONFIG_H */
 

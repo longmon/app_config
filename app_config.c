@@ -44,7 +44,7 @@ ZEND_DECLARE_MODULE_GLOBALS(app_config)
 /* True global resources - no need for thread safety here */
 static int le_app_config;
 static int sp[2] = {0};
-
+static HashTable *config_array;
 /* {{{ PHP_INI
  */
 /* Remove comments and fill if you need to have entries in php.ini
@@ -64,28 +64,78 @@ PHP_INI_END()
    Return a string to confirm that the module is compiled in */
 ZEND_FUNCTION(app_config_init)
 {
+	APP_CONFIG_INIT_ARRAY(config_array, 1024);
 	set_process_title("app_config_server");
-	//make_socketpair_pipe();
-	app_config_server();
 }
 
 PHP_FUNCTION(app_config_get)
 {
 	char *key = NULL;
+	char *namespace = NULL;
+	int nlen;
 	int len;
-	if( zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "s", &key, &len) == FAILURE ){
+	if( zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "s|s", &key, &len, &namespace, &nlen ) == FAILURE ){
 		return;
 	}
 	Req req;
 	memset(&req, 0, sizeof(req));
 	strncpy(req.key, key, strlen(key));
+	if( !namespace ){
+		namespace = "default";
+	}
+	strncpy(req.namespace, namespace, strlen(namespace));
 
 	zval retval;
 	int ret = unix_socket_get( req, &retval);
 	if( ret < 0 ){
 		printf("unix_socket_get:[%d]%s\n", errno, strerror(errno));
 	}
+	printf("retval:%s\n", Z_STRVAL(retval));
 }
+
+PHP_FUNCTION(app_config_load)
+{
+	zval *z_array = NULL;
+	char *namespace = NULL;
+	int len;
+	if( zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a|s", &z_array, &namespace, &len) == FAILURE ){
+		return;
+	}
+	if( !namespace ){
+		namespace = "default";
+	}
+	app_config_load_conf( z_array, namespace );
+
+	int count = zend_hash_num_elements( config_array );
+
+	printf("count:%d\n\n", count);
+
+	/*
+	count = zend_hash_num_elements(Z_ARRVAL_P(z_array));
+	zend_hash_internal_pointer_reset(Z_ARRVAL_P(z_array));
+
+	for( i = 0; i < count; i++ ){
+		char *key;
+		int idx;
+		zend_hash_get_current_data(Z_ARRVAL_P(z_array), (void**)&item);
+		convert_to_string_ex(item);
+		printf("item:%s\n", Z_STRVAL_PP(item));
+		zend_hash_move_forward(Z_ARRVAL_P(z_array));
+	}
+	zval **data = NULL;
+	char *k = "a";
+	zend_hash_find(Z_ARRVAL_P(z_array), "a", sizeof("a"), (void**)&data);
+	if( data ){
+		convert_to_long_ex(data);
+		printf("data:%d\n", Z_LVAL_PP(data));
+	}*/
+}
+
+PHP_FUNCTION(app_config_start)
+{
+	app_config_server();
+}
+
 /* }}} */
 /* The previous line is meant for vim and emacs, so it can correctly fold and 
    unfold functions in source code. See the corresponding marks just before 
@@ -166,6 +216,8 @@ PHP_MINFO_FUNCTION(app_config)
 const zend_function_entry app_config_functions[] = {
 	PHP_FE(app_config_init,	NULL)		/* For testing, remove later. */
 	PHP_FE(app_config_get,	NULL)		/* For testing, remove later. */
+	PHP_FE(app_config_load,	NULL)		/* For testing, remove later. */
+	PHP_FE(app_config_start,NULL)		/* For testing, remove later. */
 	PHP_FE_END	/* Must be the last line in app_config_functions[] */
 };
 /* }}} */
@@ -274,7 +326,7 @@ int unix_socket_accept( int fd ) {
 	struct sockaddr_in in_addr;
 	socklen_t in_len;
 	in_len = sizeof(in_addr);
-	char buffer[256];
+	char buffer[1024];
 	memset(buffer, 0, sizeof(buffer));
 	while(1)
 	{
@@ -310,7 +362,7 @@ int unix_socket_accept( int fd ) {
 					int count = 0;
 					while(1){
 						count = 0;
-						count = recv( sock, buffer, 256, 0);
+						count = read( sock, buffer, 1024);
 						if( count == -1 ){
 							if( errno != EAGAIN ){
 								close(sock);
@@ -323,8 +375,14 @@ int unix_socket_accept( int fd ) {
 							//epoll_ctl( epoll_fd, EPOLL_CTL_DEL, sock, NULL);
 							break;
 						}
-						printf("data:%s\n", buffer);
-						char *ret = "123345";
+						char tmp1[256]={0};
+						char tmp2[256]={0};
+						memcpy(tmp1, buffer, 256);
+						memcpy(tmp2, buffer+256, 256);
+						printf("data:%d, %s,%s\n", count, tmp1, tmp2);
+						char ret[256] = {0};
+						config_get(buffer, "default", (void **)&ret);
+						printf("382data:%s\n", ret);
 						write(sock, ret, strlen(ret));
 					}
 				}
@@ -393,7 +451,8 @@ int unix_socket_get( Req req, zval* retval)
 	if( connect( client, (struct sockaddr*)&un, sizeof(un) )  == -1 ){
 		return -2;
 	}
-	if( write(client, req.key, strlen(req.key)) == -1 ){
+	if( write(client, (void*)&req, sizeof(req)) == -1 ){
+		printf("err:%d,%s\n", errno, strerror(errno));
 		return -3;
 	}
 	char buf[256] = {0};
@@ -401,23 +460,83 @@ int unix_socket_get( Req req, zval* retval)
 		return -4;
 	}
 	printf("buf:%s\n", buf);
+	Z_STRVAL_P(retval) = buf;
 	return 0;
 }
 
-int config_get( const char *key )
+int config_get( const char *key, const char *namespace, void **pDest )
 {
+	printf("key:%s,namespace:%s\n", key, namespace);
+	zval *array;
+	if( FAILURE == zend_hash_find( config_array, namespace, sizeof(namespace), (void**)&array) ){
+		return -1;
+	}
+	hashtable_print(Z_ARRVAL_P(array));
 
+	if( SUCCESS == zend_hash_find(Z_ARRVAL_P(array), key, sizeof(key), (void **)pDest ) ) {
+		printf("pDest%s\n", (char *)*pDest);
+		return 0;
+	}
+	return -2;
 }
 
-bool check_key( const char *key, const char *delim )
+HashTable* check_key( const char *key, const char *delim )
 {
+	HashTable *keyTable = NULL;
+	ALLOC_HASHTABLE(keyTable);
+	zend_hash_init(keyTable, 8, NULL, NULL, 1);
 	if( key == '\0' ){
-		return false;
+		return keyTable;
 	}
 	char *tmp = NULL;
 	char *token;
 	tmp = strdup(key);
-	for( token = strsep(&tmp, delim); token != NULL; token = strsep(&tmp, delim) ){
-		
+	for( token = strsep(&tmp, delim); token != NULL; token = strsep(&tmp, delim) ){	
+		printf("token:%s", token);
+		if( strcmp(token, delim) != 0  ){
+			zend_hash_next_index_insert( keyTable, token, strlen(token), NULL);
+		}
 	}
-} 
+	printf("\n");
+	return keyTable;
+}
+
+void hashtable_print( HashTable *ht )
+{
+	int count,i;
+	zval **item;
+	char *key;
+	int idx;
+	count = zend_hash_num_elements( ht );
+	zend_hash_internal_pointer_reset( ht );
+	printf("count:%d\n", count);
+
+	for( i = 0; i < count; i++ ){
+		zend_hash_get_current_data( ht, (void**)&item);
+		convert_to_string_ex(item);
+		if( zend_hash_get_current_key(ht, &key, &idx, 0 ) == HASH_KEY_IS_STRING ){
+			printf("%s => %s\n", key, Z_STRVAL_PP(item) );
+		} else {
+			printf("$d => %s\n", i, Z_STRVAL_PP(item));
+		}
+		zend_hash_move_forward(ht);
+	}
+	zend_hash_internal_pointer_reset( ht );
+}
+
+int app_config_load_conf( zval *array, const char *namespace )
+{
+	if( !config_array ) 
+	{
+		return -1;
+	}
+	zval *origin;
+	if( SUCCESS == zend_hash_find( config_array, namespace, sizeof(namespace), (void **)&origin ) )
+	{
+		zend_hash_merge(Z_ARRVAL_P(origin), Z_ARRVAL_P(array), NULL, NULL, sizeof(zval *), 1);
+		zend_hash_update(config_array, namespace, sizeof(namespace), (void *)&origin, sizeof(origin), NULL);
+	} else {
+		zend_hash_add( config_array, namespace, sizeof(namespace), array, sizeof(array), NULL);
+	}
+	return 0;
+}
