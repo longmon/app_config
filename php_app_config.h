@@ -46,8 +46,8 @@ extern zend_module_entry app_config_module_entry;
 
 
 typedef struct {
-  char key[256];
-  char namespace[256];
+  char key[56];
+  char namespace[56];
 } Req;
 
 PHP_FUNCTION(app_config_init);
@@ -102,7 +102,7 @@ int make_socket_nonblock( int sockfd );
 
 void daemonize();
 
-int unix_socket_get(Req req, zval *retval);
+int unix_socket_get(Req req, void **retval);
 
 int config_get( const char *key, const char *namespace, void **pDest );
 

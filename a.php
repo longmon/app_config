@@ -1,3 +1,2 @@
-#!/usr/local/bin/php
 <?php
 app_config_get("a");
