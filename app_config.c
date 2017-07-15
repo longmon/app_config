@@ -409,13 +409,15 @@ int config_get( const char *key )
 
 }
 
-bool check_key( const char *key )
+bool check_key( const char *key, const char *delim )
 {
 	if( key == '\0' ){
 		return false;
 	}
 	char *tmp = NULL;
-	for( tmp = key; tmp != '\0'; tmp++ ){
-		if( tmp == "" )
+	char *token;
+	tmp = strdup(key);
+	for( token = strsep(&tmp, delim); token != NULL; token = strsep(&tmp, delim) ){
+		
 	}
 } 

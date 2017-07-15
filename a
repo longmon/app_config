@@ -1,0 +1,13 @@
+#!/usr/local/bin/php
+<?php
+$socket = stream_socket_client("unix:///tmp/app_config_server.sock",$errno, $strerror, 3);
+
+stream_set_blocking($socket,1);
+
+stream_set_timeout($socket, 3);
+
+fwrite($socket, "dfasdfdfsafsdf");
+
+$data = fread($socket,256);
+
+var_dump($data);
