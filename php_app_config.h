@@ -46,17 +46,30 @@ extern zend_module_entry app_config_module_entry;
 
 
 typedef struct {
-  char key[56];
-  char namespace[56];
+  char key[64];
+  char namespace[64];
+  int type;
+  char data[1024];
 } Req;
 
-PHP_FUNCTION(app_config_init);
 
-PHP_FUNCTION(app_config_load);
+typedef struct _app_config_value_struct{
+  int type;
+  int len;
+  char *data;
+} app_config_value_struct;
 
-PHP_FUNCTION(app_config_start);
+ZEND_FUNCTION(app_config_version);
 
-PHP_FUNCTION(app_config_get);
+ZEND_METHOD(app_config, __construct);
+
+ZEND_METHOD(app_config, load);
+
+ZEND_METHOD(app_config, start);
+
+ZEND_METHOD(app_config, get);
+
+ZEND_METHOD(app_config, set);
 
 /* 
   	Declare any global variables you may need between the BEGIN
@@ -102,13 +115,27 @@ int make_socket_nonblock( int sockfd );
 
 void daemonize();
 
-int unix_socket_get(Req req, void **retval);
+int unix_socket_connect();
 
-int config_get( const char *key, const char *namespace, void **pDest );
+int unix_socket_get(Req req, void *buffer, int bufferLen);
+
+int unix_socket_send( Req req, char *buffer, int bufferLen );
+
+int config_get( const char *key, const char *namespace, app_config_value_struct *pDest );
+
+int config_set( const char *key, const char *namespace, char *data);
 
 HashTable* check_key( const char *key, const char *delim );
 
 void hashtable_print( HashTable *ht );
+
+app_config_value_struct* app_config_packet( zval **val );
+
+char* app_config_array_to_string( zval **val );
+
+zval* app_config_json_encode( zval val );
+
+char* app_config_realloc( char *buffer, int *currentLen, int requireLen ) ;
 
 #endif	/* PHP_APP_CONFIG_H */
 
@@ -120,4 +147,11 @@ void hashtable_print( HashTable *ht );
  * End:
  * vim600: noet sw=4 ts=4 fdm=marker
  * vim<600: noet sw=4 ts=4
+ */
+
+
+/**
+ * todo list:
+ * 1.取消息的BUFFER太小
+ * 2.多层读取配置,如：a.b.c 读取a[b][c]
  */

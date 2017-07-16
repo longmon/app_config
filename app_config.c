@@ -45,6 +45,9 @@ ZEND_DECLARE_MODULE_GLOBALS(app_config)
 static int le_app_config;
 static int sp[2] = {0};
 static HashTable *config_array;
+
+static zend_class_entry *app_config_class_entry_ptr;
+static zend_class_entry app_config_class_entry;
 /* {{{ PHP_INI
  */
 /* Remove comments and fill if you need to have entries in php.ini
@@ -62,13 +65,13 @@ PHP_INI_END()
 /* Every user-visible function in PHP should document itself in the source */
 /* {{{ proto string confirm_app_config_compiled(string arg)
    Return a string to confirm that the module is compiled in */
-ZEND_FUNCTION(app_config_init)
+ZEND_METHOD(app_config, __construct)
 {
 	APP_CONFIG_INIT_ARRAY(config_array, 1024);
 	set_process_title("app_config_server");
 }
 
-PHP_FUNCTION(app_config_get)
+ZEND_METHOD(app_config, get)
 {
 	char *key = NULL;
 	char *namespace = NULL;
@@ -84,15 +87,41 @@ PHP_FUNCTION(app_config_get)
 		namespace = "default";
 	}
 	memcpy(req.namespace, namespace, strlen(namespace) );
-	zval **retval;
-	int ret = unix_socket_get( req, (void **)&retval);
+	req.type = 1;
+	char retval[1024] = {0};
+	int ret = unix_socket_get( req, &retval, 1024 ); //todo: buffer may be  to small
 	if( ret < 0 ){
 		printf("unix_socket_get:[%d]%s\n", errno, strerror(errno));
+		RETURN_NULL();
 	}
-	printf("retval:%d,%s\n", Z_TYPE_PP(retval),Z_STRVAL_PP(retval)); 
+	RETURN_STRING(retval, 1);
 }
 
-PHP_FUNCTION(app_config_load)
+ZEND_METHOD(app_config, set)
+{
+	char *key = NULL;
+	char *val = NULL;
+	char *namespace = NULL;
+	int klen,nlen,vlen;
+	if( zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ss|s", &key, &klen, &val,&vlen, &namespace, &nlen) == FAILURE ){
+		return;
+	}
+	Req req;
+	memset( &req, 0, sizeof(req));
+	memcpy(req.key, key, klen);
+	if( !namespace ){
+		namespace = "default";
+	}
+	memcpy(req.namespace, namespace, strlen(namespace));
+	req.type = 2;
+	memcpy(req.data, val, vlen );
+	if( unix_socket_send(req, val, vlen ) == SUCCESS ){
+		RETURN_TRUE;
+	}
+	RETURN_FALSE;
+}
+
+ZEND_METHOD(app_config,load)
 {
 	zval *z_array = NULL;
 	char *namespace = NULL;
@@ -104,35 +133,17 @@ PHP_FUNCTION(app_config_load)
 		namespace = "default";
 	}
 	app_config_load_conf( z_array, namespace );
-
-	int count = zend_hash_num_elements( config_array );
-
-	printf("count:%d\n\n", count);
-
-	/*
-	count = zend_hash_num_elements(Z_ARRVAL_P(z_array));
-	zend_hash_internal_pointer_reset(Z_ARRVAL_P(z_array));
-
-	for( i = 0; i < count; i++ ){
-		char *key;
-		int idx;
-		zend_hash_get_current_data(Z_ARRVAL_P(z_array), (void**)&item);
-		convert_to_string_ex(item);
-		printf("item:%s\n", Z_STRVAL_PP(item));
-		zend_hash_move_forward(Z_ARRVAL_P(z_array));
-	}
-	zval **data = NULL;
-	char *k = "a";
-	zend_hash_find(Z_ARRVAL_P(z_array), "a", sizeof("a"), (void**)&data);
-	if( data ){
-		convert_to_long_ex(data);
-		printf("data:%d\n", Z_LVAL_PP(data));
-	}*/
+	RETURN_TRUE;
 }
 
-PHP_FUNCTION(app_config_start)
+ZEND_METHOD(app_config, start)
 {
 	app_config_server();
+}
+
+ZEND_FUNCTION(app_config_version)
+{
+	RETURN_STRING("0.1",1);
 }
 
 /* }}} */
@@ -153,7 +164,18 @@ static void php_app_config_init_globals(zend_app_config_globals *app_config_glob
 }
 */
 /* }}} */
-
+const zend_function_entry app_config_methods[] = {
+	ZEND_FE( app_config_version, NULL )
+	PHP_FE_END
+};
+const zend_function_entry app_config_class_methods[] = {
+	ZEND_ME(app_config, __construct, 	NULL, 	ZEND_ACC_PUBLIC|ZEND_ACC_CTOR)		
+	ZEND_ME(app_config, get, 			NULL,	ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
+	ZEND_ME(app_config, set, 			NULL,	ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
+	ZEND_ME(app_config, load, 			NULL,	ZEND_ACC_PUBLIC)
+	ZEND_ME(app_config, start, 			NULL,  	ZEND_ACC_PUBLIC)
+	PHP_FE_END
+};
 /* {{{ PHP_MINIT_FUNCTION
  */
 PHP_MINIT_FUNCTION(app_config)
@@ -161,6 +183,8 @@ PHP_MINIT_FUNCTION(app_config)
 	/* If you have INI entries, uncomment these lines 
 	REGISTER_INI_ENTRIES();
 	*/
+	INIT_CLASS_ENTRY( app_config_class_entry, "app_config", app_config_class_methods);
+	app_config_class_entry_ptr = zend_register_internal_class( &app_config_class_entry  TSRMLS_CC);
 	return SUCCESS;
 }
 /* }}} */
@@ -208,25 +232,13 @@ PHP_MINFO_FUNCTION(app_config)
 }
 /* }}} */
 
-/* {{{ app_config_functions[]
- *
- * Every user visible function must have an entry in app_config_functions[].
- */
-const zend_function_entry app_config_functions[] = {
-	PHP_FE(app_config_init,	NULL)		/* For testing, remove later. */
-	PHP_FE(app_config_get,	NULL)		/* For testing, remove later. */
-	PHP_FE(app_config_load,	NULL)		/* For testing, remove later. */
-	PHP_FE(app_config_start,NULL)		/* For testing, remove later. */
-	PHP_FE_END	/* Must be the last line in app_config_functions[] */
-};
-/* }}} */
 
 /* {{{ app_config_module_entry
  */
 zend_module_entry app_config_module_entry = {
 	STANDARD_MODULE_HEADER,
 	"app_config",
-	app_config_functions,
+	app_config_methods,
 	PHP_MINIT(app_config),
 	PHP_MSHUTDOWN(app_config),
 	PHP_RINIT(app_config),		/* Replace with NULL if there's nothing to do at request start */
@@ -256,27 +268,6 @@ int make_socketpair_pipe()
 	return 0;
 }
 
-void sub_process_handler()
-{
-	unix_socket_listen("/tmp/app_config_server.sock");
-}
-
-void set_process_title( const char *title ) {
-	zval *retval = NULL;
-	zval *func = NULL;
-	zval *argv[1];
-	MAKE_STD_ZVAL(retval);
-	MAKE_STD_ZVAL(func);
-	ZVAL_STRING(func, "cli_set_process_title", 1);
-	MAKE_STD_ZVAL(argv[0]);
-	ZVAL_STRING(argv[0], title, 1 );
-	if( call_user_function(EG(function_table), NULL, func, retval, 1, argv TSRMLS_CC) == FAILURE ){
-		return;
-	}
-	zval_ptr_dtor(&argv[0]);
-	zval_ptr_dtor(&func);
-	zval_ptr_dtor(&retval);
-}
 
 int unix_socket_listen( const char *pathname ) {
 	int sockfd;
@@ -325,7 +316,7 @@ int unix_socket_accept( int fd ) {
 	struct sockaddr_in in_addr;
 	socklen_t in_len;
 	in_len = sizeof(in_addr);
-	char buffer[128];
+	char buffer[1156];
 	while(1)
 	{
 		n = epoll_wait( epoll_fd, evs, MAX_EVENTS, 1);
@@ -360,30 +351,49 @@ int unix_socket_accept( int fd ) {
 					int count = 0;
 					while(1){
 						count = 0;
-						count = read( sock, (void*)&buffer, 128);
+						count = read( sock, (void*)&buffer, 1156);
 						if( count == -1 ){
 							if( errno != EAGAIN ){
+								epoll_ctl( epoll_fd, EPOLL_CTL_DEL, sock, NULL);
 								close(sock);
-								//epoll_ctl( epoll_fd, EPOLL_CTL_DEL, sock, NULL);
 							}
 							break;
 						}
 						if( count == 0 ){
+							epoll_ctl( epoll_fd, EPOLL_CTL_DEL, sock, NULL);
 							close(sock);
-							//epoll_ctl( epoll_fd, EPOLL_CTL_DEL, sock, NULL);
 							break;
 						}
-						char key[56]={0};
-						char namespace[56]={0};
-						memcpy(key, buffer, 56);
-						memcpy(namespace, buffer+56, 56);
-						printf("read:%d,key:%s,name:%s\n", count, key, namespace);
-						zval **ret = NULL;
-						if( config_get(key, namespace, (void **)&ret) != SUCCESS ) {
-							ret = '\0';
+						char key[65]={0};
+						char namespace[64]={0};
+						char udata[1024] = {0};
+						int optype = 0;
+						memcpy(key, buffer, 64);
+						memcpy(namespace, buffer+64, 64);
+						memcpy( &optype, buffer+128, 4);
+						memcpy(udata, buffer+132, 1024);
+						printf("op:%s\n", optype);
+						if( strcmp(optype,"1") == 0 ){
+							app_config_value_struct ret;
+							memset(&ret, 0, sizeof(ret));
+							int cfget;
+							if( (cfget = config_get(key, namespace, &ret) ) < 0 ) {
+								if( write(sock, "NULL", sizeof("NULL") ) < 0 ){
+									break;
+								}
+							} else {
+								if( write(sock, ret.data, ret.len) < 0 ){
+									break;
+								}
+							}
+						} else {
+							if( config_set(key, namespace, udata ) == SUCCESS ){
+								write( sock, "1", sizeof("1") );
+							} else {
+								write( sock, "0", sizeof("0") );
+							}
+							break;
 						}
-						printf("ret:%d,%s,%d\n",Z_TYPE_PP(ret), Z_STRVAL_PP(ret), sizeof(**ret));
-						write(sock, (void *)ret, 100);
 					}
 				}
 			}
@@ -395,17 +405,35 @@ int unix_socket_accept( int fd ) {
 	return 0;
 }
 
-int config_get( const char *key, const char *namespace, void **pDest )
+int config_get( const char *key, const char *namespace, app_config_value_struct *pDest )
 {
 	zval *array;
 	if( FAILURE == zend_hash_find( config_array, namespace, strlen(namespace)+1, (void**)&array) ){
 		return -1;
 	}
-	hashtable_print(Z_ARRVAL_P(array));
-	if( zend_hash_find( Z_ARRVAL_P(array), key, strlen(key)+1, pDest ) == SUCCESS ) {
+	//hashtable_print(Z_ARRVAL_P(array));
+	zval **retval = NULL;
+	if( zend_hash_find( Z_ARRVAL_P(array), key, strlen(key)+1, (void **)&retval ) == SUCCESS ) {
+		app_config_value_struct *data = app_config_packet(retval);
+		memcpy(pDest, data, sizeof(app_config_value_struct) );
+		efree(data);
 		return 0;
 	}
+	
 	return -2;
+}
+
+int config_set( const char *key, const char *namespace, char *data)
+{
+	zval *array;
+	if( FAILURE == zend_hash_find( config_array, namespace, strlen(namespace)+1, (void**)&array) ){
+		return -1;
+	}
+	if( zend_hash_update(Z_ARRVAL_P(array), key, strlen(key)+1, data, sizeof(*data), NULL ) == FAILURE ){
+		return -2;
+	}
+	zend_hash_update(config_array, namespace, sizeof(namespace), (void *)&array, sizeof(array), NULL);
+	return 0;
 }
 
 void daemonize()
@@ -450,7 +478,7 @@ int make_socket_nonblock( int sockfd )
 	return 0;
 }
 
-int unix_socket_get( Req req, void **retval)
+int unix_socket_connect()
 {
 	struct sockaddr_un un;
 	memset( &un, 0, sizeof un);
@@ -463,65 +491,45 @@ int unix_socket_get( Req req, void **retval)
 	if( connect( client, (struct sockaddr*)&un, sizeof(un) )  == -1 ){
 		return -2;
 	}
+	
+	return client;
+}
+
+int unix_socket_get( Req req, void *buffer, int bufferLen)
+{
+	int client = unix_socket_connect();
+
+	if( client < 0 ){
+		return -5;
+	}
+
 	if( write(client, (void*)&req, sizeof(req)) == -1 ){
 		printf("err:%d,%s\n", errno, strerror(errno));
 		return -3;
 	}
-	zval *tmp = NULL;
-	if( recv(client, retval, 1024, 0 ) < 0 ){
+	if(  recv(client, buffer, bufferLen, 0 ) < 0 ){
 		return -4;
 	}
 	return 0;
 }
 
-
-
-HashTable* check_key( const char *key, const char *delim )
+int unix_socket_send( Req req, char *buffer, int bufferLen )
 {
-	HashTable *keyTable = NULL;
-	ALLOC_HASHTABLE(keyTable);
-	zend_hash_init(keyTable, 8, NULL, NULL, 1);
-	if( key == '\0' ){
-		return keyTable;
+	int client = unix_socket_connect();
+	if( client < 0 ){
+		return -5;
 	}
-	char *tmp = NULL;
-	char *token;
-	tmp = strdup(key);
-	for( token = strsep(&tmp, delim); token != NULL; token = strsep(&tmp, delim) ){	
-		printf("token:%s", token);
-		if( strcmp(token, delim) != 0  ){
-			zend_hash_next_index_insert( keyTable, token, strlen(token), NULL);
-		}
+	if( write(client, (void *)&req, sizeof(req) ) == -1 ) {
+		return -3;
 	}
-	printf("\n");
-	return keyTable;
-}
-
-void hashtable_print( HashTable *ht )
-{
-	int count,i;
-	zval **item;
-	char *key;
-	int idx;
-	count = zend_hash_num_elements( ht );
-	zend_hash_internal_pointer_reset( ht );
-	printf("count:%d\n", count);
-
-	for( i = 0; i < count; i++ ){
-		zend_hash_get_current_data( ht, (void**)&item);
-		if( Z_TYPE_PP(item) == IS_ARRAY ){
-			return hashtable_print(Z_ARRVAL_PP(item));
-		}
-		convert_to_string_ex(item);
-		if( zend_hash_get_current_key(ht, &key, &idx, 0 ) == HASH_KEY_IS_STRING ){
-			printf("%s => %s\n", key, Z_STRVAL_PP(item) );
-		} else {
-			printf("%d => %s\n", i, Z_STRVAL_PP(item));
-		}
-		zend_hash_move_forward(ht);
+	if( write(client, (void *)buffer, bufferLen ) == -1 ){
+		return -4;
 	}
-	zend_hash_internal_pointer_reset( ht );
-	return;
+	char ret;
+	if( recv( client, (void *)&ret, 1, 0) == -1 ){
+		return -5;
+	}
+	return 0;
 }
 
 int app_config_load_conf( zval *array, const char *namespace )
@@ -539,4 +547,205 @@ int app_config_load_conf( zval *array, const char *namespace )
 		zend_hash_add( config_array, namespace, sizeof(namespace), array, sizeof(array), NULL);
 	}
 	return 0;
+}
+
+app_config_value_struct * app_config_packet( zval **val )
+{
+	app_config_value_struct *valu = emalloc(sizeof(app_config_value_struct));
+	memset(valu, 0, sizeof(app_config_value_struct));
+
+	switch( Z_TYPE_PP(val) )
+	{
+		case IS_NULL:
+			valu->type = IS_NULL;
+			convert_to_string_ex(val);
+			valu->len = Z_STRLEN_PP(val);
+			valu->data = Z_STRVAL_PP(val);
+			break;
+		case IS_LONG:
+			valu->type = IS_LONG;
+			convert_to_string_ex(val);
+			valu->len = Z_STRLEN_PP(val);
+			valu->data = Z_STRVAL_PP(val);
+			break;
+		case IS_BOOL:
+			valu->type = IS_BOOL;
+			convert_to_string_ex(val);
+			valu->len = Z_STRLEN_PP(val);
+			valu->data = Z_STRVAL_PP(val);
+			break;
+		case IS_STRING:
+			valu->type = IS_STRING;
+			valu->len = Z_STRLEN_PP(val);
+			valu->data = Z_STRVAL_PP(val);
+			break;
+		case IS_ARRAY:
+			valu->type = IS_ARRAY;
+			char *ret = app_config_array_to_string(val);
+			valu->len = strlen(ret);
+			valu->data = ret;
+			break;
+		case IS_OBJECT:
+			return;
+			break;
+		case IS_RESOURCE:
+			return;
+			break;
+		default:
+			return;
+	}
+	return valu;
+}
+
+char* app_config_array_to_string( zval **val )
+{
+	int count,i;
+	zval **item;
+	char *key;
+	int idx;
+	char *retval = NULL;
+	int curlen = 0;
+	int retlen = 0;
+	if( Z_TYPE_PP(val) != IS_ARRAY )
+	{
+		return ;
+	}
+	HashTable *ht = Z_ARRVAL_PP(val);
+	count = zend_hash_num_elements( ht );
+	zend_hash_internal_pointer_reset( ht );
+	retval = app_config_realloc( retval, &curlen, 64);
+	for ( i = 0; i < count; ++i)
+	{
+		char *tmpv = NULL;
+		char tmpk[64] = {0};
+		int  need = 0;
+		zend_hash_get_current_data( ht, (void **)&item );
+		if( Z_TYPE_PP(item) == IS_ARRAY ){
+			tmpv = "Array";
+		} else {
+			convert_to_string_ex(item);
+			tmpv = Z_STRVAL_PP(item);
+		}
+		if( zend_hash_get_current_key(ht, &key, &idx, NULL ) == HASH_KEY_IS_STRING ){
+			memcpy( tmpk, key, strlen(key) );
+		} else {
+			itoa(i, tmpk, 10);
+		}
+		zend_hash_move_forward(ht);
+		need = 6+strlen(tmpk)+strlen(tmpv);
+		if( curlen <= (retlen+need) ){
+			retval = app_config_realloc( retval, &curlen, need );
+		}
+		retlen += sprintf( retval+retlen, "\"%s\":\"%s\",", tmpk, tmpv );
+	}
+	char *retval1 = emalloc(strlen(retval)+1);
+	memset(retval1, 0, strlen(retval)+1 );
+	sprintf(retval1,"{%s", retval);
+	retval1[strlen(retval)] = '}';
+	efree(retval);
+	return retval1;
+}
+
+/** 重新申请内存，并把原内容复制过去 */
+char* app_config_realloc( char *buffer, int *currentLen, int requireLen ) {
+	int newLen = ( *currentLen+requireLen) * 1.5 ;
+	char *tmp = emalloc( newLen );
+	memset(tmp, 0, newLen );
+	if( *currentLen > 0 ) {
+		memcpy(tmp, buffer, *currentLen );
+		efree(buffer);
+	}
+	*currentLen = newLen;
+	return tmp;
+}
+
+HashTable* check_key( const char *key, const char *delim )
+{
+  HashTable *keyTable = NULL;
+  ALLOC_HASHTABLE(keyTable);
+  zend_hash_init(keyTable, 8, NULL, NULL, 1);
+  if( key == '\0' ){
+    return keyTable;
+  }
+  char *tmp = NULL;
+  char *token;
+  tmp = strdup(key);
+  for( token = strsep(&tmp, delim); token != NULL; token = strsep(&tmp, delim) ){ 
+    printf("token:%s", token);
+    if( strcmp(token, delim) != 0  ){
+      zend_hash_next_index_insert( keyTable, token, strlen(token), NULL);
+    }
+  }
+  printf("\n");
+  return keyTable;
+}
+
+void hashtable_print( HashTable *ht )
+{
+  int count,i;
+  zval **item;
+  char *key;
+  int idx;
+  count = zend_hash_num_elements( ht );
+  zend_hash_internal_pointer_reset( ht );
+  printf("count:%d\n", count);
+
+  for( i = 0; i < count; i++ ){
+    zend_hash_get_current_data( ht, (void**)&item);
+    if( Z_TYPE_PP(item) == IS_ARRAY ){
+      return hashtable_print(Z_ARRVAL_PP(item));
+    }
+    convert_to_string_ex(item);
+    if( zend_hash_get_current_key(ht, &key, &idx, NULL ) == HASH_KEY_IS_STRING ){
+      printf("%s => %s\n", key, Z_STRVAL_PP(item) );
+    } else {
+      printf("%d => %s\n", i, Z_STRVAL_PP(item));
+    }
+    zend_hash_move_forward(ht);
+  }
+  zend_hash_internal_pointer_reset( ht );
+  return;
+}
+
+void sub_process_handler()
+{
+	unix_socket_listen("/tmp/app_config_server.sock");
+}
+
+void set_process_title( const char *title ) {
+	zval *retval = NULL;
+	zval *func = NULL;
+	zval *argv[1];
+	MAKE_STD_ZVAL(retval);
+	MAKE_STD_ZVAL(func);
+	ZVAL_STRING(func, "cli_set_process_title", 1);
+	MAKE_STD_ZVAL(argv[0]);
+	ZVAL_STRING(argv[0], title, 1 );
+	if( call_user_function(EG(function_table), NULL, func, retval, 1, argv TSRMLS_CC) == FAILURE ){
+		return;
+	}
+	zval_ptr_dtor(&argv[0]);
+	zval_ptr_dtor(&func);
+	zval_ptr_dtor(&retval);
+}
+
+
+zval * app_config_json_encode( zval val )
+{
+	printf("app_config_json_encode\n");
+	zval *retval = NULL;
+	zval *func = NULL;
+	zval *argv[1];
+	MAKE_STD_ZVAL(retval);
+	MAKE_STD_ZVAL(func);
+	ZVAL_STRING(func, "json_encode", 1);
+	MAKE_STD_ZVAL(argv[0]);
+	argv[0] = &val;
+	if( call_user_function(EG(function_table), NULL, func, retval, 1, argv TSRMLS_CC) == FAILURE ) {
+		printf("call_user_function %s\n", Z_STRVAL_P(func));
+		return;
+	}
+	printf("675 retval:%s\n", Z_STRVAL_P(retval) );
+	zval_ptr_dtor(&func);
+	return retval;
 }
